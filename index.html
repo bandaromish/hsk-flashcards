@@ -3041,15 +3041,37 @@ function startCustomSet(id){const s=loadCustomSets().find(x=>x.id===id);if(!s)re
 function normalizeHanText(t){return (t||'').replace(/[，。；;、,\s\n\r\t]+/g,' ').trim().split(' ').filter(Boolean);}
 function addWordsFromPhotoText(){
  const raw=(document.getElementById('custom-photo-text').value||'').trim();
- if(!raw){document.getElementById('custom-camera-status').textContent='لم يظهر نص بعد. التقط صورة أو الصق الكلمات الصينية أولًا.';return;}
- const compact=raw.replace(/\s/g,'');const tokens=normalizeHanText(raw);let added=0;
- // Match explicit tokens first, then search longer dictionary words in OCR text that may not contain spaces.
+ const status=document.getElementById('custom-camera-status');
+ if(!raw){status.textContent='لم يظهر نص بعد. التقط صورة أو الصق الكلمات الصينية أولًا.';return;}
  const matches=new Set();
- tokens.forEach(token=>{ALL_WORDS.forEach((w,i)=>{if(w.h===token)matches.add(i);});});
- ALL_WORDS.forEach((w,i)=>{if(w.h && w.h.length>=2 && compact.includes(w.h))matches.add(i);});
- matches.forEach(i=>{if(!customSelected.has(i)){customSelected.add(i);added++;}});
+ // Prefer whole OCR tokens/lines. Do not search every dictionary word as a substring: that
+ // caused a short photo of a few words to select many unrelated overlapping words.
+ const dictionaryByHanzi=new Map();
+ ALL_WORDS.forEach((w,i)=>{if(w.h){if(!dictionaryByHanzi.has(w.h))dictionaryByHanzi.set(w.h,[]);dictionaryByHanzi.get(w.h).push(i);}});
+ const addExact=(text)=>{const ids=dictionaryByHanzi.get(text);if(ids)ids.forEach(i=>matches.add(i));};
+ const lines=raw.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
+ lines.forEach(line=>{
+   // OCR textbook lines often begin with an item number; remove it before matching.
+   const cleaned=line.replace(/^\s*[（(【\[]?\d{1,3}[）)】\].、．.：:]?\s*/,'').trim();
+   const hanRuns=cleaned.match(/[\u3400-\u4dbf\u4e00-\u9fff]+/g)||[];
+   hanRuns.forEach(run=>{
+     // If OCR returns a full word/phrase, only accept it when it exactly exists in the deck.
+     if(dictionaryByHanzi.has(run)){addExact(run);return;}
+     // If a line contains several concatenated words, split it using longest non-overlapping
+     // dictionary entries, so each character is consumed at most once.
+     let pos=0,foundAny=false;
+     while(pos<run.length){
+       let found=null;
+       for(let len=Math.min(6,run.length-pos);len>=2;len--){const part=run.slice(pos,pos+len);if(dictionaryByHanzi.has(part)){found={part,len};break;}}
+       if(found){addExact(found.part);pos+=found.len;foundAny=true;}else pos++;
+     }
+   });
+ });
+ // Also support users who paste a space/comma-separated list instead of OCR lines.
+ normalizeHanText(raw).forEach(token=>{const onlyHan=token.match(/[\u3400-\u4dbf\u4e00-\u9fff]+/g)||[];onlyHan.forEach(part=>{if(dictionaryByHanzi.has(part))addExact(part);});});
+ let added=0;matches.forEach(i=>{if(!customSelected.has(i)){customSelected.add(i);added++;}});
  renderCustomWords();
- document.getElementById('custom-camera-status').textContent=`تم العثور على ${matches.size} كلمة من القاموس، وأضيفت ${added} كلمة جديدة للتحديد. راجع التحديد قبل حفظ المجموعة.`;
+ status.textContent=matches.size?`تم العثور على ${matches.size} كلمة مطابقة بعد إزالة التكرار، وأضيفت ${added} كلمة جديدة للتحديد. راجع النتائج قبل الحفظ.`:'لم تُطابق الكلمات المستخرجة كلمات القاموس بدقة. راجع النص الصيني في المربع وصحّح المسافات أو الأرقام ثم أعد المطابقة.';
 }
 let customOcrWorkerPromise=null;
 async function loadTesseract(){
